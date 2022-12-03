@@ -7,7 +7,7 @@ from code_.data_reader import data_reader
 from code_.feature_extractor import Features
 from code_.model import Models
 
-x_train, x_test, y_train, y_test = data_reader(path)
+x_train, x_test, y_train, y_test = data_reader('')
 train_features = Features(x_train).extract_all()
 test_features = Features(x_test).extract_all()
 

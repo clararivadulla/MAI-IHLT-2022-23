@@ -17,6 +17,7 @@ nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 nltk.download('wordnet')
 semcor_ic = wordnet_ic.ic('ic-semcor.dat')
+brown_ic = wordnet_ic.ic('ic-brown.dat')
 regex = re.compile('[^a-z0-9]')
 
 stopw = set(nltk.corpus.stopwords.words('english')) # english stopwords
@@ -46,6 +47,43 @@ def pos_wn(pair):
     if tag:
         word = wnl.lemmatize(word, pos = tag)
     return word
+
+def longest_common_subsequence(t1, t2):
+
+    tokens1 = list(t1)
+    tokens2 = list(t2)
+
+    dp = [[None] * (len(tokens1) + 1) for i in range(len(tokens2) + 1)]
+    for i in range(len(tokens2) + 1):
+        for j in range(len(tokens1) + 1):
+            if i == 0 or j == 0:
+                dp[i][j] = 0
+            elif tokens2[i - 1] == tokens1[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+
+    return dp[len(tokens2)][len(tokens1)]
+
+def longest_common_substring(t1, t2):
+
+    s = ''.join(t1)
+    t = ''.join(t2)
+    n = len(s)
+    m = len(t)
+
+    dp = [[0 for i in range(m + 1)] for j in range(2)]
+    res = 0
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if (s[i - 1] == t[j - 1]):
+                dp[i % 2][j] = dp[(i - 1) % 2][j - 1] + 1
+                if (dp[i % 2][j] > res):
+                    res = dp[i % 2][j]
+            else:
+                dp[i % 2][j] = 0
+    return res
 
 def lemmatize(sentences_POS):
     lemmas = []
@@ -87,6 +125,24 @@ def syntactic_role_sim(POS1, POS2):
         similarities.append((len(syn1) + len(syn2))/lin_sum)
     return similarities
 
+def normalize(data):
+    return (data-np.min(data))/(np.max(data)-np.min(data))
+
+def get_trigrams(tokens):
+    tkn_lst = list(tokens)
+    trigrams = []
+    for i in range(len(tkn_lst) - 2):
+        trigram = (tkn_lst[i], tkn_lst[i + 1], tkn_lst[i + 2])
+        trigrams.append(trigram)
+    return trigrams
+
+def get_fourgrams(tokens):
+    tkn_lst = list(tokens)
+    fourgrams = []
+    for i in range(len(tkn_lst) - 3):
+        fourgram = (tkn_lst[i], tkn_lst[i + 1], tkn_lst[i + 2], tkn_lst[i + 3])
+        fourgrams.append(fourgram)
+    return fourgrams
 
 def jaccard_empty(set1, set2):
     if len(set1) != 0 and len(set2) != 0:
@@ -116,16 +172,32 @@ class Features:
         l2 = lesk(self.pair2, self.pos2)
         self.jac_lesk = [5*(1 - jaccard_empty(t[0], t[1])) for t in zip(l1, l2)]
 
+    def n_grams(self):
+        self.jac_trigrams = [5*(1 - jaccard_empty(set(get_trigrams(t[0])), set(get_trigrams(t[1])))) for t in zip(self.tokens1, self.tokens2)]
+        self.jac_fourgrams = [5 * (1 - jaccard_empty(set(get_fourgrams(t[0])), set(get_fourgrams(t[1])))) for t in
+                             zip(self.tokens1, self.tokens2)]
+
     def syntatic_role(self):
         self.synt = syntactic_role_sim(self.pos1, self.pos2)
 
+    def lcs_sequence(self):
+        self.lcs_sequence_score = 5 * normalize([longest_common_subsequence(t[0], t[1])/len(t[0]) for t in
+                             zip(self.tokens1, self.tokens2)])
+
+    def lcs_string(self):
+        self.lcs_string_score = 5 * normalize([longest_common_substring(t[0], t[1])/len(t[0]) for t in
+                             zip(self.tokens1, self.tokens2)])
+
     def extract_all(self):
-        self.syntatic_role()
+        #self.syntatic_role()
         self.simple_tokens()
         self.lemmatizer()
         self.lesk()
-        return pd.DataFrame({'Simple': self.jac_simp, 'Lemmas': self.jac_lemmas, 'LESK': self.jac_lesk, 
-                            'Syntatic': self.synt})
+        self.n_grams()
+        self.lcs_sequence()
+        self.lcs_string()
+
+        return pd.DataFrame({'Simple': self.jac_simp, 'Lemmas': self.jac_lemmas, 'LESK': self.jac_lesk, '3-grams': self.jac_trigrams, '4-grams': self.jac_fourgrams, 'Longest Common Subsequence': self.lcs_sequence_score, 'Longest Common Substring': self.lcs_string_score})
 
 
 
