@@ -123,51 +123,49 @@ def lesk(sentences, POS):
     return syns
 
 
-def syntactic_role_sim(POS1, POS2, method='lin'):
+def syntactic_role_sim(POS1, POS2, method='lch'):
 
     similarities = []
     for pairs1, pairs2 in zip(POS1, POS2):
+        syns1 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs1]
+        syns2 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs2]
+        for syn1 in syns1:
+            sim = []
+            if len(syn1) > 0:
+                s1 = syn1[0]
+            else:
+                s1 = ''
+            if isinstance(s1, nltk.corpus.reader.wordnet.Synset):
+                for syn2 in syns2:
+                    if len(syn2) > 0:
+                        s2 = syn2[0]
+                    else:
+                        s2 = ''
+                    if isinstance(s2, nltk.corpus.reader.wordnet.Synset):
+                        try:
+                            if method == 'lch':
+                                sim.append(s1.lch_similarity(s2))
+                            elif method == 'wup':
+                                sim.append(s1.wup_similarity(s2))
+                            elif method == 'path':
+                                sim.append(s1.path_similarity(s2))
+                            elif method == 'lin':
+                                sim.append(s1.lin_similarity(s2, semcor_ic))
+                        except:
+                            sim.append(0)
 
-        syn1 = []
-        syn2 = []
-        for pair in pairs1:
-            tag = tags.get(pair[1])
-            if tag and pair[0].lower() not in stopw and pair[0].lower() in nltk.corpus.words.words():
-                syn1.append((pair, (wordnet.synsets(pair[0], tag))))
-        for pair in pairs2:
-            tag = tags.get(pair[1])
-            if tag and pair[0].lower() not in stopw and pair[0].lower() in nltk.corpus.words.words():
-                syn2.append((pair, (wordnet.synsets(pair[0], tag))))
-
-        sum = 0
-        for s1, s2 in itertools.product(syn1, syn2):
-
-            if len(s1[1]) > 0 and len(s2[1]) > 0 and s1[1][0] == s2[1][0] and method != 'lch':
-                sum += 1
-            elif len(s1[1]) > 0 and len(s2[1]) > 0 and s1[1][0] == s2[1][0] and len(s2[1]) > 0:
-                sum += 3
-
-            if s1[0][1] == s2[0][1] and len(s1[1]) > 0 and len(s2[1]) > 0 and method == 'path':
-                sum += s1[1][0].path_similarity(s2[1][0])
-            elif s1[0][1] == s2[0][1] and len(s1[1]) > 0 and len(s2[1]) > 0 and method == 'lch':
-                if s1[1][0].pos() == s2[1][0].pos():
-                    sum += s1[1][0].lch_similarity(s2[1][0])
-            elif s1[0][1] == s2[0][1] and len(s1[1]) > 0 and len(s2[1]) > 0 and method == 'wup':
-                sum += s1[1][0].wup_similarity(s2[1][0])
-            elif s1[0][1] == s2[0][1] and len(s1[1]) > 0 and len(s2[1]) > 0 and method == 'lin':
-                if s1[1][0].pos() == s2[1][0].pos() and s1[1][0].pos() in {'n', 'v'}:  # No agafa ni 'a' ni 'r'
-                    sum += s1[1][0].lin_similarity(s2[1][0], semcor_ic)
-
-        if sum != 0:
-            similarities.append((len(syn1) + len(syn2)) / sum)
+        if len(sim) > 0:
+            similarities.append(max(sim))
         else:
             similarities.append(0)
 
     return similarities
 
 
-def levenshtein_distance(s1, s2):
-    return nltk.edit_distance(s1, s2) / max(len(s1), len(s2))
+def levenshtein_distance(l1, l2):
+    sent1 = ' '.join(l1)
+    sent2 = ' '.join(l2)
+    return nltk.edit_distance(sent1, sent2) / max(len(sent1), len(sent2))
 
 def sorensen_dice(l1, l2):
     bigrams_l1 = list(nltk.ngrams(' '.join(l1), 2))
@@ -183,7 +181,7 @@ def hamming(l1, l2):
     sent1 = ' '.join(l1)
     sent2 = ' '.join(l2)
     hamming_distance = hamming(sent1, sent2)
-    return hamming_distance
+    return hamming_distance / max(len(sent1), len(sent2))
 
 def num_verbs(pos1, pos2):
     count_v1 = len([v for v in pos1 if v[1].startswith('V')])
@@ -282,8 +280,8 @@ class Features:
                                  zip(self.tokens1_sw, self.tokens2_sw)]
 
     def levenshtein_dist(self):
-        self.leven_dist = [levenshtein_distance(p[0], p[1]) for p in
-                           zip(self.pair1, self.pair2)]
+        self.leven_dist = [levenshtein_distance(l[0], l[1]) for l in
+                           zip(self.lemmas1, self.lemmas2)]
 
     def sorensen_dice_coef(self):
         self.sd_coefficient = [sorensen_dice(l[0], l[1]) for l in
@@ -303,9 +301,9 @@ class Features:
                           zip(self.pos1, self.pos2)]
 
     def extract_all(self):
-        # self.syntatic_role()
-        self.num_tags()
+        self.syntatic_role()
         # self.hamming_distance()
+        self.num_tags()
         self.sorensen_dice_coef()
         self.tokens()
         self.lemmas()
@@ -314,7 +312,6 @@ class Features:
         self.lcs_subsequence()
         self.lesk()
         self.levenshtein_dist()
-
 
         return pd.DataFrame(
             {'Tokens Jac. Sim.': self.jac_tokens,
@@ -332,13 +329,13 @@ class Features:
              'Longest Common Substring': self.lcs_substring,
              'Longest Common Substring (stop-words)': self.lcs_substring_sw,
              'Lesk Jac. Sim.': self.jac_lesk,
-             # 'Leacock-Chodorow Sim.': self.lch_sim,
-             # 'Path Sim.': self.path_sim,
-             # 'Wu-Palmer Sim.': self.wup_sim,
-             # 'Lin Sim.': self.lin_sim,
+             'Leacock-Chodorow Sim.': self.lch_sim,
+             'Path Sim.': self.path_sim,
+             'Wu-Palmer Sim.': self.wup_sim,
+             'Lin Sim.': self.lin_sim,
              'Levenshtein Distance': self.leven_dist,
              'Sorensen-Dice Coefficient (lemmas without stop-words)': self.sd_coefficient,
-             #'Hamming Distance': self.ham_dist,
+             # 'Hamming Distance': self.ham_dist,
              '# of Verb Tags': self.verbs_diff,
              '# of Noun Tags': self.nouns_diff,
              '# of Adjective Tags': self.adjs_diff,
