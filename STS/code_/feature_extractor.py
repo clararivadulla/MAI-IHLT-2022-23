@@ -3,7 +3,10 @@ import nltk
 from nltk.metrics import jaccard_distance
 from nltk.stem import PorterStemmer
 from nltk.corpus import wordnet, wordnet_ic
+from nltk import ne_chunk
 from nltk.stem import WordNetLemmatizer
+nltk.download('maxent_ne_chunker')
+nltk.download('conll2000')
 from scipy.spatial.distance import hamming
 import numpy as np
 import pandas as pd
@@ -123,10 +126,28 @@ def lesk(sentences, POS):
     return syns
 
 
-def syntactic_role_sim(POS1, POS2, method='lch'):
+def NE_basic(pos):
+    texts = []
+    for pair in pos:
+        chunks = nltk.ne_chunk(pair, binary=False)  # chunk it # https://www.youtube.com/watch?v=zDnPFxnALBg
+        triads = nltk.tree2conlltags(chunks)  # get the triads with the token, pos tag, and if its named entity
+        text = []
+        for triad in triads:
+            token = re.sub(r'[^\w\s]', '', triad[0]).lower()  # remove punctuaction inside each token
+            if token in stopw or re.match(r'^[_\W]+$',
+                                          token) or token == '':  # if its stopword, non-alphanumeric token, or empty we skip
+                continue
+            if triad[2][0] == 'O':  # if not named entity we append to text
+                text.append(token)
+            else:  # if named entity we append to text as well
+                text.append(triad[2][0])
+        texts.append(text)
+    return texts
 
+
+def syntactic_role_sim(pos1, pos2, method='lch'):
     similarities = []
-    for pairs1, pairs2 in zip(POS1, POS2):
+    for pairs1, pairs2 in zip(pos1, pos2):
         syns1 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs1]
         syns2 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs2]
         for syn1 in syns1:
@@ -167,6 +188,7 @@ def levenshtein_distance(l1, l2):
     sent2 = ' '.join(l2)
     return nltk.edit_distance(sent1, sent2) / max(len(sent1), len(sent2))
 
+
 def sorensen_dice(l1, l2):
     bigrams_l1 = list(nltk.ngrams(' '.join(l1), 2))
     bigrams_l2 = list(nltk.ngrams(' '.join(l2), 2))
@@ -177,11 +199,13 @@ def sorensen_dice(l1, l2):
         s = 0
     return s
 
+
 def hamming(l1, l2):
     sent1 = ' '.join(l1)
     sent2 = ' '.join(l2)
     hamming_distance = hamming(sent1, sent2)
     return hamming_distance / max(len(sent1), len(sent2))
+
 
 def num_verbs(pos1, pos2):
     count_v1 = len([v for v in pos1 if v[1].startswith('V')])
@@ -190,6 +214,7 @@ def num_verbs(pos1, pos2):
         return 1
     return 1 - (abs(count_v1 - count_v2) / (count_v1 + count_v2))
 
+
 def num_nouns(pos1, pos2):
     count_n1 = len([n for n in pos1 if n[1].startswith('N')])
     count_n2 = len([n for n in pos2 if n[1].startswith('N')])
@@ -197,12 +222,14 @@ def num_nouns(pos1, pos2):
         return 1
     return 1 - (abs(count_n1 - count_n2) / (count_n1 + count_n2))
 
+
 def num_adjs(pos1, pos2):
     count_a1 = len([a for a in pos1 if a[1].startswith('J')])
     count_a2 = len([a for a in pos2 if a[1].startswith('J')])
     if count_a1 == 0 and count_a2 == 0 or count_a1 == count_a2:
         return 1
     return 1 - (abs(count_a1 - count_a2) / (count_a1 + count_a2))
+
 
 def num_advs(pos1, pos2):
     count_adv1 = len([a for a in pos1 if a[1].startswith('R')])
@@ -222,6 +249,8 @@ class Features:
         self.tokens2, self.pos2 = tokenize(self.pair2)
         self.tokens1_sw, _ = tokenize(self.pair1, sw=True)  # with stopwords
         self.tokens2_sw, _ = tokenize(self.pair2, sw=True)  # with stopwords
+        self.NE1 = NE_basic(self.pos1)
+        self.NE2 = NE_basic(self.pos2)
 
         self.lemmas1 = lemmatize(self.pos1)
         self.lemmas2 = lemmatize(self.pos2)
@@ -243,23 +272,32 @@ class Features:
 
     def n_grams(self):
         self.jac_2grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]), set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
             t in zip(self.tokens1, self.tokens2)]
         self.jac_3grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]), set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
             t in zip(self.tokens1, self.tokens2)]
         self.jac_4grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]), set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
             t in zip(self.tokens1, self.tokens2)]
         self.jac_2grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]), set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
             t in zip(self.tokens1_sw, self.tokens2_sw)]
         self.jac_3grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]), set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
             t in zip(self.tokens1_sw, self.tokens2_sw)]
         self.jac_4grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]), set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
+            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]),
+                               set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
             t in zip(self.tokens1_sw, self.tokens2_sw)]
+
+    def NE(self):
+        self.NE_basic = [(1 - jaccard_distance(set(n[0]), set(n[1]))) for n in zip(self.NE1, self.NE2)]
 
     def syntatic_role(self):
         self.lch_sim = syntactic_role_sim(self.pos1, self.pos2, method='lch')
@@ -285,10 +323,11 @@ class Features:
 
     def sorensen_dice_coef(self):
         self.sd_coefficient = [sorensen_dice(l[0], l[1]) for l in
-                           zip(self.lemmas1, self.lemmas2)]
+                               zip(self.lemmas1, self.lemmas2)]
+
     def hamming_distance(self):
         self.ham_dist = [hamming(l[0], l[1]) for l in
-                               zip(self.lemmas1, self.lemmas2)]
+                         zip(self.lemmas1, self.lemmas2)]
 
     def num_tags(self):
         self.verbs_diff = [num_verbs(p[0], p[1]) for p in
@@ -301,7 +340,8 @@ class Features:
                           zip(self.pos1, self.pos2)]
 
     def extract_all(self):
-        self.syntatic_role()
+        self.NE()
+        # self.syntatic_role()
         # self.hamming_distance()
         self.num_tags()
         self.sorensen_dice_coef()
@@ -314,7 +354,8 @@ class Features:
         self.levenshtein_dist()
 
         return pd.DataFrame(
-            {'Tokens Jac. Sim.': self.jac_tokens,
+            {'NE basic': self.NE_basic,
+             'Tokens Jac. Sim.': self.jac_tokens,
              'Tokens (stop-words) Jac. Sim.': self.jac_tokens_sw,
              'Lemmas Jac. Sim.': self.jac_lemmas,
              'Lemmas (stop-words) Jac. Sim.': self.jac_lemmas_sw,
@@ -329,10 +370,10 @@ class Features:
              'Longest Common Substring': self.lcs_substring,
              'Longest Common Substring (stop-words)': self.lcs_substring_sw,
              'Lesk Jac. Sim.': self.jac_lesk,
-             'Leacock-Chodorow Sim.': self.lch_sim,
-             'Path Sim.': self.path_sim,
-             'Wu-Palmer Sim.': self.wup_sim,
-             'Lin Sim.': self.lin_sim,
+             # 'Leacock-Chodorow Sim.': self.lch_sim,
+             # 'Path Sim.': self.path_sim,
+             # 'Wu-Palmer Sim.': self.wup_sim,
+             # 'Lin Sim.': self.lin_sim,
              'Levenshtein Distance': self.leven_dist,
              'Sorensen-Dice Coefficient (lemmas without stop-words)': self.sd_coefficient,
              # 'Hamming Distance': self.ham_dist,
