@@ -4,14 +4,22 @@ from nltk.metrics import jaccard_distance
 from nltk.stem import PorterStemmer
 from nltk.corpus.reader.wordnet import information_content
 from nltk.corpus import wordnet, wordnet_ic
+from locale import atof, setlocale, LC_NUMERIC
 from nltk import ne_chunk
+from numpy import dot
+from numpy.linalg import norm
 from nltk.stem import WordNetLemmatizer
 from scipy.spatial.distance import hamming
 from unidecode import unidecode
+import math
 import spacy
 import numpy as np
 import pandas as pd
 import itertools
+from scipy.stats import pearsonr
+
+
+setlocale(LC_NUMERIC, 'en_US.UTF-8')
 
 nltk.download('words')
 nltk.download('omw-1.4')
@@ -37,7 +45,6 @@ tags = {'NN': wordnet.NOUN,
 wnl = WordNetLemmatizer()
 
 
-
 def preprocess(sentence):
     sentence = unidecode(sentence)                    # converts to ascii everything
     sentence = re.sub(r"(-\b|\b-|/)", "", sentence)   # remove hyphens and forward slashes
@@ -55,19 +62,38 @@ def preprocess(sentence):
     sentence = re.sub(r"  ", " ", sentence)
     return sentence
 
+
+def preprocess_tokenized(tokens):
+    clean_tokens = []
+    for token in tokens:
+        if token.isalnum():
+            clean_tokens.append(token.lower())
+        else:
+            try:
+                numeric_str = str(round(atof(token), 1))
+                if numeric_str[-2:] == '.0':
+                    clean_tokens.append(numeric_str[:-2])
+                else:
+                    clean_tokens.append(numeric_str)
+            except:
+                pass
+    return clean_tokens
+
+
 def tokenize(sentence, sw=False):
     tokens = nltk.word_tokenize(sentence)                       # tokenize the sentence
     pairs = nltk.pos_tag(tokens)                                # get the POS-tag of the tokens
     if sw:                                                      
         tokens = [w for w in tokens if not w.lower() in stopw]  # remove stopwords
-    tokens = [w.lower() for w in tokens if w.isalnum()]         # removes non alphanumeric from each word
+
+    tokens = preprocess_tokenized(tokens)
     return set(tokens), pairs, tokens
 
 def lemmatize(sentences_POS, sw=False):
     lemmas = [pos_wn(pair) for pair in sentences_POS]           # obtain the lemmas
     if sw:
         lemmas = [w for w in lemmas if not w.lower() in stopw]  # remove stopwords
-    lemmas = [w.lower() for w in lemmas if w.isalnum()]         # removes non alphanumeric from each word
+    lemmas = preprocess_tokenized(lemmas)                       # removes non alphanumeric from each word
     return set(lemmas)
 
 def spacy_lemmatize(sentence):
@@ -96,9 +122,11 @@ def synset(POS, synsets = {}):
     return synsets, keys
 
 def word_ngrams(tokens_list, n):
+    #tokens_list = set([w for w in tokens_list if not w.replace('.', '', 1).isdigit()]) # remove digits from ngrams
     return set(nltk.ngrams(tokens_list, n))
 
 def char_ngrams(tokens_list, n):
+    #tokens_list = set([w for w in tokens_list if not w.replace('.', '', 1).isdigit()]) # remove digits from ngrams
     return set(re.findall(fr"(?=([^\W_]{{{n}}}))", ' '.join(tokens_list)))
 
 
@@ -206,6 +234,7 @@ def syntactic_role_sim(synsets, keys1, keys2, method='lch'):
     else:
         return 0
 
+# Features from the paper "TakeLab: Systems for Measuring Semantic Text Similarity"
 def wawo_score(synset, keys1, keys2):
     pwn = 0
     for w1 in keys1:
@@ -224,18 +253,16 @@ def wordnet_augmented_word_overlap(synset, keys1, keys2):
     return 2*pwn1*pwn2/(pwn1 + pwn2) # harmonic mean
 
 
-
-
 def weighted_word_overlap(synset, keys1, keys2):
     s1_s2 = set(keys1).intersection(set(keys2))
     numerator = 0
     if len(s1_s2) == 0:
         return 0
     
-    numerator = sum([information_content(synset[w][0], brown_ic) for w in s1_s2 if synset[w][1] in ['v', 'n']])
+    numerator = sum([information_content(synset[w][0], brown_ic) for w in s1_s2 if synset[w][1] in ['v', 'n'] and information_content(synset[w][0], brown_ic) < 1e100])
 
-    wwc1 = sum([information_content(synset[w][0], brown_ic) for w in keys1 if synset[w][1] in ['v', 'n']])
-    wwc2 = sum([information_content(synset[w][0], brown_ic) for w in keys2 if synset[w][1] in ['v', 'n']])
+    wwc1 = sum([information_content(synset[w][0], brown_ic) for w in keys1 if synset[w][1] in ['v', 'n'] and information_content(synset[w][0], brown_ic) < 1e100])
+    wwc2 = sum([information_content(synset[w][0], brown_ic) for w in keys2 if synset[w][1] in ['v', 'n'] and information_content(synset[w][0], brown_ic) < 1e100])
 
     if wwc1 == 0 or wwc2 == 0 or numerator == 0:
         return 0
@@ -243,6 +270,81 @@ def weighted_word_overlap(synset, keys1, keys2):
     wwc1 = numerator / wwc1
     wwc2 = numerator / wwc2
     return 2*wwc1*wwc2/(wwc1 + wwc2) # harmonic mean
+
+
+def cosine(v1, v2):
+        """ cosine  = ( V1 * V2 ) / ||V1|| x ||V2|| """
+        
+        denom = (norm(v1) * norm(v2))
+        if denom == 0:
+            return 0
+        return float(dot(v1, v2) / denom)
+
+def vector_space_sentence(synset, keys1, keys2):
+    s1_s2 = set(keys1).union(set(keys2))
+
+    u1 = [0] * len(s1_s2)
+    u2 = [0] * len(s1_s2)
+
+    u1_ic = [0] * len(s1_s2)
+    u2_ic = [0] * len(s1_s2)
+
+    for i, w in enumerate(s1_s2):
+        if w in keys1:
+            u1[i] += 1
+
+            if synset[w][1] in ['v', 'n']:
+                ic = information_content(synset[w][0], brown_ic)
+                if ic > 1e100:
+                    u1_ic[i] = 0
+                else:
+                    u1_ic[i] += ic
+
+
+        if w in keys2:
+            u2[i] += 1
+
+            if synset[w][1] in ['v', 'n']:
+                ic = information_content(synset[w][0], brown_ic)
+                if ic > 1e100:
+                    u2_ic[i] = 0
+                else:
+                    u2_ic[i] += ic
+    
+    return cosine(u1, u2), cosine(u1_ic, u2_ic)
+
+
+def function_word_similarity(tokens1, tokens2):
+    x1 = [0] * len(stopw)
+    x2 = [0] * len(stopw)
+    for i, w in enumerate(stopw):
+        if w in tokens1:
+            x1[i] += 1
+        if w in tokens2:
+            x2[i] += 1
+        
+    if sum(x1) == 0 or sum(x2) == 0:
+        return 0
+    return pearsonr(x1, x2)[0]
+
+
+        
+def number_features(tokens1, tokens2):
+    n1 = set([w for w in tokens1 if w.replace('.', '', 1).isdigit()])
+    n2 = set([w for w in tokens2 if w.replace('.', '', 1).isdigit()])
+
+    number_log = math.log(1 + len(n1) + len(n2))
+
+    if (len(n1) + len(n2) == 0):
+        number_intersection = 0
+    else:
+        number_intersection = 2 * len(n1.intersection(n2))/(len(n1) + len(n2))
+    
+    number_bool = n1.issubset(n2) or n2.issubset(n1)
+
+    return number_log, number_intersection, number_bool
+
+
 
 
 def levenshtein_distance(l1, l2):
@@ -372,6 +474,16 @@ class Features:
 
             'sorensen_dice': [],
             'levenshtein': [],
+
+            'vector_space_sentence': [],
+            'vector_space_sentence_ic': [],
+
+            'number_log': [],
+            'number_intersection': [],
+            'number_bool': [],
+
+            'function_word_similarity': [],
+
         }
         self.extract()
 
@@ -416,6 +528,9 @@ class Features:
             self.features['lcs_substring'].append(longest_common_substring(tokens1, tokens2))
             self.features['lcs_substring_sw'].append(longest_common_substring(tokens1_sw, tokens2_sw))
 
+            # Function word Similarity
+            self.features['function_word_similarity'].append(function_word_similarity(tokens1, tokens2))
+
             # Extract Synsets
             syns, keys1 = synset(pos1)
             syns, keys2 = synset(pos2, syns)
@@ -431,6 +546,16 @@ class Features:
 
             self.features['sorensen_dice'].append(sorensen_dice(lemmas1, lemmas2))
             self.features['levenshtein'].append(levenshtein_distance(lemmas1, lemmas2))
+
+            vss, vss_ic = vector_space_sentence(syns, keys1, keys2)
+            self.features['vector_space_sentence'].append(vss)
+            self.features['vector_space_sentence_ic'].append(vss_ic)
+
+            #print(tokens1)
+            number_log, number_intersection, number_bool = number_features(tokens1, tokens2)
+            self.features['number_log'].append(number_log)
+            self.features['number_intersection'].append(number_intersection)
+            self.features['number_bool'].append(number_bool)
 
             # Word n-grams
             for n in range(1, 5):
@@ -468,21 +593,8 @@ class Features:
             self.features['synets1_lemmas'] = keys1
             self.features['synets2_lemmas'] = keys2
 
-    def levenshtein_dist(self):
-        self.leven_dist = []
-
-
-
-    def hamming_distance(self):
-        self.ham_dist = [hamming(l[0], l[1]) for l in
-                         zip(self.lemmas1, self.lemmas2)]
-
 
     def extract_all(self):
-        # self.hamming_distance()
-        #self.sorensen_dice_coef()
-        #self.levenshtein_dist()
-
         return pd.DataFrame({
             'NE NLTK': similarity(self.features['NE1'], self.features['NE2']),
             'Tokens Jac. Sim.': similarity(self.features['tokens1'], self.features['tokens2']),
@@ -530,10 +642,22 @@ class Features:
             'Levenshtein Distance': self.features['levenshtein'],
             'Sorensen-Dice Coefficient (lemmas without stop-words)': self.features['sorensen_dice'],
             ## 'Hamming Distance': self.ham_dist,
+            
             '# of Verb Tags': self.features['verbs_diff'],
             '# of Noun Tags': self.features['nouns_diff'],
             '# of Adjective Tags': self.features['adjs_diff'],
             '# of Adverb Tags': self.features['advs_diff'],
+
             'WAWO': self.features['WAWO'],
             'WWO': self.features['WWO'],
+
+            'Vector Space Sentence': self.features['vector_space_sentence'],
+            'Vector Space Sentence IC': self.features['vector_space_sentence_ic'],
+
+            'Numeric Feature: Log': self.features['number_log'],
+            'Numeric Feature: Intersection ': self.features['number_intersection'],
+            'Numeric Feature Bool': self.features['number_bool'],
+
+            'Function Word Similarity': self.features['function_word_similarity'],
+
         })

@@ -17,10 +17,24 @@ class Models:
         self.y_train = y_train
         self.y_test = y_test
         self.seed = seed
+
+    def print_results(self, model, y_predict, clf):
+        print(f'Finished training {model}')
+        print('-'*80)
+        print('Training Score and Params:')
+        print('\tBest parameters', clf.best_params_)
+        print('\tPearson on training:', clf.best_score_)
+        print('-'*80)
+        print('Test Score:')
+        print('\tPearson on test:', pearsonr(self.y_test, y_predict)[0])
+        print('-'*80)
+        print()
+
+
     
     def RF(self):
         parameters = {
-            'n_estimators': [300, 400, 500], 
+            'n_estimators': [250, 300, 500], 
             'max_features': [None], 
             'bootstrap': [True], 
             'oob_score': [True], 
@@ -34,9 +48,7 @@ class Models:
         clf = GridSearchCV(RandomForestRegressor(), parameters, cv = 5, n_jobs = -1, scoring = pearson, verbose = 10)
         clf.fit(self.x_train, self.y_train)
         y_predict = clf.predict(self.x_test)
-        print('Finished training')
-        print('Best parameters', clf.best_params_)
-        print('Pearson with the test data', pearsonr(self.y_test, y_predict)[0])
+        self.print_results('RBF', y_predict, clf)
 
     def SVR(self):
         parameters = {
@@ -49,9 +61,7 @@ class Models:
         clf = GridSearchCV(SVR(), parameters, cv = 5, n_jobs = -1, scoring = pearson, verbose = 10)
         clf.fit(self.x_train, self.y_train)
         y_predict = clf.predict(self.x_test)
-        print('Finished training')
-        print('Best parameters', clf.best_params_)
-        print('Pearson with the test data', pearsonr(self.y_test, y_predict)[0])
+        self.print_results('SVM', y_predict, clf)
 
     def MLP(self):
         parameters = {
@@ -63,8 +73,6 @@ class Models:
         clf = GridSearchCV(MLPRegressor(), parameters, cv = 5, n_jobs = -1, scoring = pearson, verbose = 10)
         clf.fit(self.x_train, self.y_train)
         y_predict = clf.predict(self.x_test)
-        print('Finished training')
-        print('Best parameters', clf.best_params_)
-        print('Pearson with the test data', pearsonr(self.y_test, y_predict)[0])
+        self.print_results('MLP', y_predict, clf)
 
 

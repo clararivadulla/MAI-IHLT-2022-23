@@ -11,6 +11,6 @@ test_features = Features(x_test).extract_all()
 
 models = Models(train_features, test_features, y_train, y_test)
 models.RF()
-#models.SVR()
-#models.MLP()
+models.SVR()
+models.MLP()
 
