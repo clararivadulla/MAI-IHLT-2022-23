@@ -2,12 +2,13 @@ import re
 import nltk
 from nltk.metrics import jaccard_distance
 from nltk.stem import PorterStemmer
+from nltk.corpus.reader.wordnet import information_content
 from nltk.corpus import wordnet, wordnet_ic
 from nltk import ne_chunk
 from nltk.stem import WordNetLemmatizer
-nltk.download('maxent_ne_chunker')
-nltk.download('conll2000')
 from scipy.spatial.distance import hamming
+from unidecode import unidecode
+import spacy
 import numpy as np
 import pandas as pd
 import itertools
@@ -19,9 +20,12 @@ nltk.download('stopwords')
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 nltk.download('wordnet')
+nltk.download('maxent_ne_chunker')
+nltk.download('conll2000')
 semcor_ic = wordnet_ic.ic('ic-semcor.dat')
 brown_ic = wordnet_ic.ic('ic-brown.dat')
-regex = re.compile('[^a-z0-9]')
+
+nlp = spacy.load('en_core_web_sm', disable = ['parser','ner'])
 
 stopw = set(nltk.corpus.stopwords.words('english'))  # english stopwords
 
@@ -33,43 +37,42 @@ tags = {'NN': wordnet.NOUN,
 wnl = WordNetLemmatizer()
 
 
-def tokenize(sentences, sw=False):
-    sentences_tokens = []
-    sentences_pairs = []
-    for sentence in sentences:
-        tokens = nltk.word_tokenize(sentence)  # tokenize
-        pairs = nltk.pos_tag(tokens)  # get the pos of the tokens
-        if sw:
-            tokens = [regex.sub('', w.lower()) for w in tokens]
-        else:
-            tokens = [regex.sub('', w.lower()) for w in tokens if
-                      not w.lower() in stopw]  # remove stopwords and symbols from each word
-        tokens = [w for w in tokens if w]  # remove empty elements
-        sentences_tokens.append(set(tokens))
-        sentences_pairs.append(pairs)
-    return sentences_tokens, sentences_pairs
 
+def preprocess(sentence):
+    sentence = unidecode(sentence)                    # converts to ascii everything
+    sentence = re.sub(r"(-\b|\b-|/)", "", sentence)   # remove hyphens and forward slashes
+    sentence = re.sub(r"$US", "$", sentence)          # normalize dollar values, no other money symbol appears in the train dataset
+    sentence = re.sub(r"<\.?(.*?)>", r"\1", sentence) # matches the interior string of the format <XYZ> and returns XYZ
+    
+    sentence = re.sub(r"n\'t", " not", sentence)
+    sentence = re.sub(r"\'re", " are", sentence)
+    sentence = re.sub(r"\'s", " is", sentence)
+    sentence = re.sub(r"\'d", " would", sentence)
+    sentence = re.sub(r"\'ll", " will", sentence)
+    sentence = re.sub(r"\'t", " not", sentence)
+    sentence = re.sub(r"\'ve", " have", sentence)
+    sentence = re.sub(r"\'m", " am", sentence)
+    sentence = re.sub(r"  ", " ", sentence)
+    return sentence
+
+def tokenize(sentence, sw=False):
+    tokens = nltk.word_tokenize(sentence)                       # tokenize the sentence
+    pairs = nltk.pos_tag(tokens)                                # get the POS-tag of the tokens
+    if sw:                                                      
+        tokens = [w for w in tokens if not w.lower() in stopw]  # remove stopwords
+    tokens = [w.lower() for w in tokens if w.isalnum()]         # removes non alphanumeric from each word
+    return set(tokens), pairs, tokens
 
 def lemmatize(sentences_POS, sw=False):
-    lemmas = []
-    for sentence in sentences_POS:
-        lemmatized = [pos_wn(pair) for pair in sentence]
-        if sw:
-            lemmatized = [regex.sub('', w.lower()) for w in lemmatized]
-        else:
-            lemmatized = [regex.sub('', w.lower()) for w in lemmatized if
-                          not w.lower() in stopw]  # remove stopwords and symbols from each word
-        lemmatized = [w for w in lemmatized if w]  # remove empty elements
-        lemmas.append(set(lemmatized))
-    return lemmas
+    lemmas = [pos_wn(pair) for pair in sentences_POS]           # obtain the lemmas
+    if sw:
+        lemmas = [w for w in lemmas if not w.lower() in stopw]  # remove stopwords
+    lemmas = [w.lower() for w in lemmas if w.isalnum()]         # removes non alphanumeric from each word
+    return set(lemmas)
 
-
-def jaccard_empty(set1, set2):
-    if len(set1) != 0 and len(set2) != 0:
-        return jaccard_distance(set1, set2)
-    else:
-        return 0
-
+def spacy_lemmatize(sentence):
+    doc = nlp(sentence)
+    return set([token.lemma_ for token in doc if token.lemma_ not in stopw])
 
 def pos_wn(pair):
     word = pair[0].lower()
@@ -77,6 +80,26 @@ def pos_wn(pair):
     if tag:
         word = wnl.lemmatize(word, pos=tag)
     return word
+
+def synset(POS, synsets = {}):
+    keys = []
+    for pair in POS:
+        if pair[0] in stopw:
+            pass
+        tag = tags.get(pair[1])
+        if tag:
+            synset = wordnet.synsets(pair[0], tag)
+            if synset:
+                synsets[pair[0]] = (synset[0], synset[0].pos())
+                keys.append(pair[0])
+    
+    return synsets, keys
+
+def word_ngrams(tokens_list, n):
+    return set(nltk.ngrams(tokens_list, n))
+
+def char_ngrams(tokens_list, n):
+    return set(re.findall(fr"(?=([^\W_]{{{n}}}))", ' '.join(tokens_list)))
 
 
 def longest_common_subsequence(t1, t2):
@@ -116,71 +139,110 @@ def longest_common_substring(t1, t2):
     return res / min(m, n)
 
 
-def lesk(sentences, POS):
-    syns = []
-    for sentence, pairs in zip(sentences, POS):
-        synsets = [nltk.wsd.lesk(sentence, pair[0], pos=tags.get(pair[1][:2].upper())) for pair in pairs if
+def lesk(sentence, pairs):
+    synsets = [nltk.wsd.lesk(sentence, pair[0], pos=tags.get(pair[1][:2].upper())) for pair in pairs if
                    pair[0].lower() not in stopw]  # skip if the word is stopword else use lesk
-        synsets = [syn.name() for syn in synsets if syn]  # we ignore the words without meaning
-        syns.append(set(synsets))
-    return syns
+    synsets = [syn.name() for syn in synsets if syn]  # we ignore the words without meaning
+    return set(synsets)
 
 
-def NE_basic(pos):
-    texts = []
-    for pair in pos:
-        chunks = nltk.ne_chunk(pair, binary=False)  # chunk it # https://www.youtube.com/watch?v=zDnPFxnALBg
-        triads = nltk.tree2conlltags(chunks)  # get the triads with the token, pos tag, and if its named entity
-        text = []
-        for triad in triads:
-            token = re.sub(r'[^\w\s]', '', triad[0]).lower()  # remove punctuaction inside each token
-            if token in stopw or re.match(r'^[_\W]+$',
-                                          token) or token == '':  # if its stopword, non-alphanumeric token, or empty we skip
-                continue
-            if triad[2][0] == 'O':  # if not named entity we append to text
-                text.append(token)
-            else:  # if named entity we append to text as well
-                text.append(triad[2][0])
-        texts.append(text)
-    return texts
+def NE_nltk(pair):
+    chunks = nltk.ne_chunk(pair, binary=False)  # chunk it 
+    triads = nltk.tree2conlltags(chunks)        # get the triads with the token, pos tag, and if its named entity
+    text = []
+    for triad in triads:
+        token = re.sub(r'[^\w\s]', '', triad[0]).lower()  # remove punctuaction inside each token
+        if token in stopw or re.match(r'^[_\W]+$', token) or token == '':  # if its stopword, non-alphanumeric token, or empty we skip
+            continue
+        if triad[2][0] == 'O': # if not named enitity we append to text
+            text.append(token)
+        elif triad[2][0] == 'B': # if named entity we append to text as well
+            text.append(token)
+        else: # if the named entity continues, we concatanate it with the last string
+            text[-1] += ' ' + token
+    return set(text)
 
 
-def syntactic_role_sim(pos1, pos2, method='lch'):
-    similarities = []
-    for pairs1, pairs2 in zip(pos1, pos2):
-        syns1 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs1]
-        syns2 = [wordnet.synsets(pair[0], tags.get(pair[1])) for pair in pairs2]
-        for syn1 in syns1:
-            sim = []
-            if len(syn1) > 0:
-                s1 = syn1[0]
-            else:
-                s1 = ''
-            if isinstance(s1, nltk.corpus.reader.wordnet.Synset):
-                for syn2 in syns2:
-                    if len(syn2) > 0:
-                        s2 = syn2[0]
+def syntactic_role_sim(synsets, keys1, keys2, method='lch'):
+    sim = []
+    for w1, w2 in list(itertools.product(keys1, keys2)):
+        if w1 == w2:
+            sim.append(1)
+            continue
+
+        syn1, tag1 = synsets[w1]
+        syn2, tag2 = synsets[w1]
+
+        if tag1 != tag2:
+            continue
+
+        try:
+            if method == 'lch':
+                if tag1 == tag2:
+                    s = syn1.lch_similarity(syn2)
+                    if s:
+                        sim.append(s/syn1.lch_similarity(syn1))
                     else:
-                        s2 = ''
-                    if isinstance(s2, nltk.corpus.reader.wordnet.Synset):
-                        try:
-                            if method == 'lch':
-                                sim.append(s1.lch_similarity(s2))
-                            elif method == 'wup':
-                                sim.append(s1.wup_similarity(s2))
-                            elif method == 'path':
-                                sim.append(s1.path_similarity(s2))
-                            elif method == 'lin':
-                                sim.append(s1.lin_similarity(s2, semcor_ic))
-                        except:
-                            sim.append(0)
+                        sim.append(0)
+                else:
+                    sim.append(0)
+            elif method == 'wup':
+                s = syn1.wup_similarity(syn2)
+                sim.append(s) if s else sim.append(0)
+            elif method == 'path':
+                s = syn1.path_similarity(syn2)
+                sim.append(s) if s else sim.append(0)
+            elif method == 'lin':
+                if tag1 == tag2 and tag1 in ['n', 'v']:
+                    s = syn1.lin_similarity(syn2, brown_ic)
+                    sim.append(s) if s else sim.append(0)
+                else:
+                    sim.append(0)
+        except:
+            sim.append(0)
 
-        if len(sim) > 0:
-            similarities.append(max(sim))
+    if len(sim) > 0:
+        return sum(sim)/len(sim)
+    else:
+        return 0
+
+def wawo_score(synset, keys1, keys2):
+    pwn = 0
+    for w1 in keys1:
+        if w1 in keys2:
+            pwn += 1
         else:
-            similarities.append(0)
+            syn1 = synset[w1][0]
+            pwn += max([syn1.path_similarity(synset[w2][0], brown_ic) for w2 in keys2])
+    return pwn
 
-    return similarities
+def wordnet_augmented_word_overlap(synset, keys1, keys2):
+    if len(keys2) == 0 or len(keys1) == 0:
+        return 0
+    pwn1 = wawo_score(synset, keys1, keys2)/len(keys2)
+    pwn2 = wawo_score(synset, keys2, keys1)/len(keys1)
+    return 2*pwn1*pwn2/(pwn1 + pwn2) # harmonic mean
+
+
+
+
+def weighted_word_overlap(synset, keys1, keys2):
+    s1_s2 = set(keys1).intersection(set(keys2))
+    numerator = 0
+    if len(s1_s2) == 0:
+        return 0
+    
+    numerator = sum([information_content(synset[w][0], brown_ic) for w in s1_s2 if synset[w][1] in ['v', 'n']])
+
+    wwc1 = sum([information_content(synset[w][0], brown_ic) for w in keys1 if synset[w][1] in ['v', 'n']])
+    wwc2 = sum([information_content(synset[w][0], brown_ic) for w in keys2 if synset[w][1] in ['v', 'n']])
+
+    if wwc1 == 0 or wwc2 == 0 or numerator == 0:
+        return 0
+    
+    wwc1 = numerator / wwc1
+    wwc2 = numerator / wwc2
+    return 2*wwc1*wwc2/(wwc1 + wwc2) # harmonic mean
 
 
 def levenshtein_distance(l1, l2):
@@ -238,6 +300,22 @@ def num_advs(pos1, pos2):
         return 1
     return 1 - (abs(count_adv1 - count_adv2) / (count_adv1 + count_adv2))
 
+def jaccard_empty(set1, set2):
+    if len(set1) != 0 and len(set2) != 0:
+        return jaccard_distance(set1, set2)
+    else:
+        return 0
+
+def overlap(set1, set2):
+    denom = len(set1.intersection(set2))
+    if denom == 0:
+        return 0
+    return 2*pow(len(set1)/denom + len(set2)/denom, -1)
+
+
+def similarity(set1, set2, sim_func = 'jaccard_empty'):
+    return [1 - globals()[sim_func](s[0], s[1]) for s in zip(set1, set2)]
+
 
 class Features:
 
@@ -245,140 +323,217 @@ class Features:
         self.pair1 = data['Sentence 1']
         self.pair2 = data['Sentence 2']
 
-        self.tokens1, self.pos1 = tokenize(self.pair1)
-        self.tokens2, self.pos2 = tokenize(self.pair2)
-        self.tokens1_sw, _ = tokenize(self.pair1, sw=True)  # with stopwords
-        self.tokens2_sw, _ = tokenize(self.pair2, sw=True)  # with stopwords
-        self.NE1 = NE_basic(self.pos1)
-        self.NE2 = NE_basic(self.pos2)
+        self.features = {
+            'tokens1': [], 'tokens2': [],
+            'lemmas1': [], 'lemmas2': [],
+            'tokens1_sw': [], 'tokens2_sw': [],
+            'lemmas1_sw': [], 'lemmas2_sw': [],
 
-        self.lemmas1 = lemmatize(self.pos1)
-        self.lemmas2 = lemmatize(self.pos2)
-        self.lemmas1_sw = lemmatize(self.pos1, sw=True)
-        self.lemmas2_sw = lemmatize(self.pos2, sw=True)
+            'lemmas1_spacy': [], 'lemmas2_spacy': [],
 
-    def tokens(self):
-        self.jac_tokens = [(1 - jaccard_distance(t[0], t[1])) for t in zip(self.tokens1, self.tokens2)]
-        self.jac_tokens_sw = [(1 - jaccard_distance(t[0], t[1])) for t in zip(self.tokens1_sw, self.tokens2_sw)]
+            'NE1': [], 'NE2': [],
+            'lesk1': [], 'lesk2': [],
+            'syns1': [], 'syns2': [],
 
-    def lemmas(self):
-        self.jac_lemmas = [(1 - jaccard_distance(t[0], t[1])) for t in zip(self.lemmas1, self.lemmas2)]
-        self.jac_lemmas_sw = [(1 - jaccard_distance(t[0], t[1])) for t in zip(self.lemmas1_sw, self.lemmas2_sw)]
+            'word_ngrams1_1': [], 'word_ngrams1_sw_1': [],
+            'word_ngrams1_2': [], 'word_ngrams1_sw_2': [],
+            'word_ngrams1_3': [], 'word_ngrams1_sw_3': [],
+            'word_ngrams1_4': [], 'word_ngrams1_sw_4': [],
+            'word_ngrams2_1': [], 'word_ngrams2_sw_1': [],
+            'word_ngrams2_2': [], 'word_ngrams2_sw_2': [],
+            'word_ngrams2_3': [], 'word_ngrams2_sw_3': [],
+            'word_ngrams2_4': [], 'word_ngrams2_sw_4': [],
 
-    def lesk(self):
-        l1 = lesk(self.pair1, self.pos1)
-        l2 = lesk(self.pair2, self.pos2)
-        self.jac_lesk = [1 - jaccard_empty(t[0], t[1]) for t in zip(l1, l2)]
+            'char_ngrams1_2': [], 'char_ngrams1_sw_2': [],
+            'char_ngrams1_3': [], 'char_ngrams1_sw_3': [],
+            'char_ngrams1_4': [], 'char_ngrams1_sw_4': [],
+            'char_ngrams2_2': [], 'char_ngrams2_sw_2': [],
+            'char_ngrams2_3': [], 'char_ngrams2_sw_3': [],
+            'char_ngrams2_4': [], 'char_ngrams2_sw_4': [],
 
-    def n_grams(self):
-        self.jac_2grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
-            t in zip(self.tokens1, self.tokens2)]
-        self.jac_3grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
-            t in zip(self.tokens1, self.tokens2)]
-        self.jac_4grams = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
-            t in zip(self.tokens1, self.tokens2)]
-        self.jac_2grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 2)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 2)]))) for
-            t in zip(self.tokens1_sw, self.tokens2_sw)]
-        self.jac_3grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 3)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 3)]))) for
-            t in zip(self.tokens1_sw, self.tokens2_sw)]
-        self.jac_4grams_sw = [
-            (1 - jaccard_empty(set([g for g in nltk.ngrams(' '.join(t[0]), 4)]),
-                               set([g for g in nltk.ngrams(' '.join(t[1]), 4)]))) for
-            t in zip(self.tokens1_sw, self.tokens2_sw)]
+            'lcs_subsequence': [], 'lcs_subsequence_sw': [],
+            'lcs_substring': [], 'lcs_substring_sw': [],
 
-    def NE(self):
-        self.NE_basic = [(1 - jaccard_distance(set(n[0]), set(n[1]))) for n in zip(self.NE1, self.NE2)]
+            'lch_sim': [],
+            'wup_sim': [],
+            'lin_sim': [],
+            'path_sim': [],
 
-    def syntatic_role(self):
-        self.lch_sim = syntactic_role_sim(self.pos1, self.pos2, method='lch')
-        self.wup_sim = syntactic_role_sim(self.pos1, self.pos2, method='wup')
-        self.lin_sim = syntactic_role_sim(self.pos1, self.pos2, method='lin')
-        self.path_sim = syntactic_role_sim(self.pos1, self.pos2, method='path')
+            'verbs_diff': [],
+            'nouns_diff': [],
+            'adjs_diff': [],
+            'advs_diff': [],
 
-    def lcs_subsequence(self):
-        self.lcs_subsequence = [longest_common_subsequence(t[0], t[1]) for t in
-                                zip(self.tokens1, self.tokens2)]
-        self.lcs_subsequence_sw = [longest_common_subsequence(t[0], t[1]) for t in
-                                   zip(self.tokens1_sw, self.tokens2_sw)]
+            'synets1_lemmas': [],
+            'synets2_lemmas': [],
 
-    def lcs_substring(self):
-        self.lcs_substring = [longest_common_substring(t[0], t[1]) for t in
-                              zip(self.tokens1, self.tokens2)]
-        self.lcs_substring_sw = [longest_common_substring(t[0], t[1]) for t in
-                                 zip(self.tokens1_sw, self.tokens2_sw)]
+            'WAWO': [],
+            'WWO': [],
+
+            'sorensen_dice': [],
+            'levenshtein': [],
+        }
+        self.extract()
+
+    def extract(self):
+        for s1, s2 in zip(self.pair1, self.pair2):
+            # Preprocess the data
+            s1 = preprocess(s1)
+            s2 = preprocess(s2)
+
+            # Tokenize and obtain the POS-tags
+            tokens1, pos1, tokens_list1 = tokenize(s1)
+            tokens2, pos2, tokens_list2 = tokenize(s2)
+
+            # Tokenize removing stopwords
+            tokens1_sw, _, tokens_list1_sw = tokenize(s1, sw = True) # removes stopwords
+            tokens2_sw, _, tokens_list2_sw = tokenize(s2, sw = True) # removes stopwords
+
+            # From the POS-tag lemmatize
+            lemmas1 = lemmatize(pos1)
+            lemmas2 = lemmatize(pos2)
+
+            lemmas1_spacy = spacy_lemmatize(s1)
+            lemmas2_spacy = spacy_lemmatize(s2)
+
+            # Lemmatize removing stopwords
+            lemmas1_sw = lemmatize(pos1, sw = True)
+            lemmas2_sw = lemmatize(pos2, sw = True)
+
+            # Named entities
+            self.features['NE1'].append(NE_nltk(pos1))
+            self.features['NE2'].append(NE_nltk(pos2))
+
+            # LESK
+            self.features['lesk1'].append(lesk(s1, pos1))
+            self.features['lesk2'].append(lesk(s2, pos2))
+
+            # Longest common subsequence
+            self.features['lcs_subsequence'].append(longest_common_subsequence(tokens1, tokens2))
+            self.features['lcs_subsequence_sw'].append(longest_common_subsequence(tokens1_sw, tokens2_sw))
+            
+            # Longest common substring
+            self.features['lcs_substring'].append(longest_common_substring(tokens1, tokens2))
+            self.features['lcs_substring_sw'].append(longest_common_substring(tokens1_sw, tokens2_sw))
+
+            # Extract Synsets
+            syns, keys1 = synset(pos1)
+            syns, keys2 = synset(pos2, syns)
+
+            # Syntactic role similarity
+            self.features['lch_sim'].append(syntactic_role_sim(syns, keys1, keys2, method='lch'))
+            self.features['wup_sim'].append(syntactic_role_sim(syns, keys1, keys2, method='wup'))
+            self.features['lin_sim'].append(syntactic_role_sim(syns, keys1, keys2, method='lin'))
+            self.features['path_sim'].append(syntactic_role_sim(syns, keys1, keys2, method='path'))
+
+            self.features['WAWO'].append(wordnet_augmented_word_overlap(syns, keys1, keys2))
+            self.features['WWO'].append(weighted_word_overlap(syns, keys1, keys2))
+
+            self.features['sorensen_dice'].append(sorensen_dice(lemmas1, lemmas2))
+            self.features['levenshtein'].append(levenshtein_distance(lemmas1, lemmas2))
+
+            # Word n-grams
+            for n in range(1, 5):
+                self.features['word_ngrams1_' + str(n)].append(word_ngrams(tokens_list1, n))
+                self.features['word_ngrams2_' + str(n)].append(word_ngrams(tokens_list2, n))
+                self.features['word_ngrams1_sw_' + str(n)].append(word_ngrams(tokens_list1_sw, n))
+                self.features['word_ngrams2_sw_' + str(n)].append(word_ngrams(tokens_list2_sw, n))
+
+            # Character n-grams
+            for n in range(2, 5):
+                self.features['char_ngrams1_' + str(n)].append(char_ngrams(tokens_list1, n))
+                self.features['char_ngrams2_' + str(n)].append(char_ngrams(tokens_list2, n))
+                self.features['char_ngrams1_sw_' + str(n)].append(char_ngrams(tokens_list1_sw, n))
+                self.features['char_ngrams2_sw_' + str(n)].append(char_ngrams(tokens_list2_sw, n))
+
+            self.features['verbs_diff'].append(num_verbs(pos1, pos2))
+            self.features['nouns_diff'].append(num_nouns(pos1, pos2))
+            self.features['adjs_diff'].append(num_adjs(pos1, pos2))
+            self.features['advs_diff'].append(num_advs(pos1, pos2))
+
+            # We store the information in vectors to compute the Pearson Correlation
+            self.features['tokens1'].append(tokens1)
+            self.features['tokens2'].append(tokens2)
+            self.features['lemmas1'].append(lemmas1)
+            self.features['lemmas2'].append(lemmas2)
+
+            self.features['lemmas1_spacy'].append(lemmas1_spacy)
+            self.features['lemmas2_spacy'].append(lemmas2_spacy)
+
+            self.features['tokens1_sw'].append(tokens1_sw)
+            self.features['tokens2_sw'].append(tokens2_sw)
+            self.features['lemmas1_sw'].append(lemmas1_sw)
+            self.features['lemmas2_sw'].append(lemmas2_sw)
+
+            self.features['synets1_lemmas'] = keys1
+            self.features['synets2_lemmas'] = keys2
 
     def levenshtein_dist(self):
-        self.leven_dist = [levenshtein_distance(l[0], l[1]) for l in
-                           zip(self.lemmas1, self.lemmas2)]
+        self.leven_dist = []
 
-    def sorensen_dice_coef(self):
-        self.sd_coefficient = [sorensen_dice(l[0], l[1]) for l in
-                               zip(self.lemmas1, self.lemmas2)]
+
 
     def hamming_distance(self):
         self.ham_dist = [hamming(l[0], l[1]) for l in
                          zip(self.lemmas1, self.lemmas2)]
 
-    def num_tags(self):
-        self.verbs_diff = [num_verbs(p[0], p[1]) for p in
-                           zip(self.pos1, self.pos2)]
-        self.nouns_diff = [num_nouns(p[0], p[1]) for p in
-                           zip(self.pos1, self.pos2)]
-        self.adjs_diff = [num_adjs(p[0], p[1]) for p in
-                          zip(self.pos1, self.pos2)]
-        self.advs_diff = [num_advs(p[0], p[1]) for p in
-                          zip(self.pos1, self.pos2)]
 
     def extract_all(self):
-        self.NE()
-        # self.syntatic_role()
         # self.hamming_distance()
-        self.num_tags()
-        self.sorensen_dice_coef()
-        self.tokens()
-        self.lemmas()
-        self.n_grams()
-        self.lcs_substring()
-        self.lcs_subsequence()
-        self.lesk()
-        self.levenshtein_dist()
+        #self.sorensen_dice_coef()
+        #self.levenshtein_dist()
 
-        return pd.DataFrame(
-            {'NE basic': self.NE_basic,
-             'Tokens Jac. Sim.': self.jac_tokens,
-             'Tokens (stop-words) Jac. Sim.': self.jac_tokens_sw,
-             'Lemmas Jac. Sim.': self.jac_lemmas,
-             'Lemmas (stop-words) Jac. Sim.': self.jac_lemmas_sw,
-             'Bigrams Jac. Sim.': self.jac_2grams,
-             'Bigrams (stop-words) Jac. Sim.': self.jac_2grams_sw,
-             'Trigrams Jac. Sim.': self.jac_3grams,
-             'Trigrams (stop-words) Jac. Sim.': self.jac_3grams_sw,
-             'Fourgrams Jac. Sim.': self.jac_4grams,
-             'Fourgrams (stop-words) Jac. Sim.': self.jac_4grams_sw,
-             'Longest Common Subsequence': self.lcs_subsequence,
-             'Longest Common Subsequence (stop-words)': self.lcs_subsequence_sw,
-             'Longest Common Substring': self.lcs_substring,
-             'Longest Common Substring (stop-words)': self.lcs_substring_sw,
-             'Lesk Jac. Sim.': self.jac_lesk,
-             # 'Leacock-Chodorow Sim.': self.lch_sim,
-             # 'Path Sim.': self.path_sim,
-             # 'Wu-Palmer Sim.': self.wup_sim,
-             # 'Lin Sim.': self.lin_sim,
-             'Levenshtein Distance': self.leven_dist,
-             'Sorensen-Dice Coefficient (lemmas without stop-words)': self.sd_coefficient,
-             # 'Hamming Distance': self.ham_dist,
-             '# of Verb Tags': self.verbs_diff,
-             '# of Noun Tags': self.nouns_diff,
-             '# of Adjective Tags': self.adjs_diff,
-             '# of Adverb Tags': self.advs_diff
-             })
+        return pd.DataFrame({
+            'NE NLTK': similarity(self.features['NE1'], self.features['NE2']),
+            'Tokens Jac. Sim.': similarity(self.features['tokens1'], self.features['tokens2']),
+            'Tokens (stop-words) Jac. Sim.': similarity(self.features['tokens1_sw'], self.features['tokens2_sw']),
+            'Lemmas Jac. Sim.': similarity(self.features['lemmas1'], self.features['lemmas2']),
+            'Lemmas (stop-words) Jac. Sim.': similarity(self.features['lemmas1_sw'], self.features['lemmas2_sw']),
+            'Lemmas (Spacy) Jac. Sim.': similarity(self.features['lemmas1_spacy'], self.features['lemmas2_spacy']),
+
+            'Unigrams Jac. Sim.': similarity(self.features['word_ngrams1_1'], self.features['word_ngrams2_1']),
+            'Bigrams Jac. Sim.': similarity(self.features['word_ngrams1_2'], self.features['word_ngrams2_2']),
+            'Trigrams Jac. Sim.': similarity(self.features['word_ngrams1_3'], self.features['word_ngrams2_3']),
+            'Fourgrams Jac. Sim.': similarity(self.features['word_ngrams1_4'], self.features['word_ngrams2_4']),
+            'Unigrams (stop-words) Jac. Sim.': similarity(self.features['word_ngrams1_sw_1'], self.features['word_ngrams2_sw_1']),
+            'Bigrams (stop-words) Jac. Sim.': similarity(self.features['word_ngrams1_sw_2'], self.features['word_ngrams2_sw_2']),
+            'Trigrams (stop-words) Jac. Sim.': similarity(self.features['word_ngrams1_sw_3'], self.features['word_ngrams2_sw_3']),
+            'Fourgrams (stop-words) Jac. Sim.': similarity(self.features['word_ngrams1_sw_4'], self.features['word_ngrams2_sw_4']),
+
+            'Char Bigrams Jac. Sim.': similarity(self.features['char_ngrams1_2'], self.features['char_ngrams2_2']),
+            'Char Trigrams Jac. Sim.': similarity(self.features['char_ngrams1_3'], self.features['char_ngrams2_3']),
+            'Char Fourgrams Jac. Sim.': similarity(self.features['char_ngrams1_4'], self.features['char_ngrams2_4']),
+            'Char Bigrams (stop-words) Jac. Sim.': similarity(self.features['char_ngrams1_sw_2'], self.features['char_ngrams2_sw_2']),
+            'Char Trigrams (stop-words) Jac. Sim.': similarity(self.features['char_ngrams1_sw_3'], self.features['char_ngrams2_sw_3']),
+            'Char Fourgrams (stop-words) Jac. Sim.': similarity(self.features['char_ngrams1_sw_4'], self.features['char_ngrams2_sw_4']),
+
+            'Overlap Unigram': similarity(self.features['word_ngrams1_1'], self.features['word_ngrams2_1'], 'overlap'),
+            'Overlap Bigrams': similarity(self.features['word_ngrams1_2'], self.features['word_ngrams2_2'], 'overlap'),
+            'Overlap Trigrams': similarity(self.features['word_ngrams1_3'], self.features['word_ngrams2_3'], 'overlap'),
+            'Overlap Unigrams (stop-words)': similarity(self.features['word_ngrams1_sw_1'], self.features['word_ngrams2_sw_1'], 'overlap'),
+            'Overlap Bigrams (stop-words)': similarity(self.features['word_ngrams1_sw_2'], self.features['word_ngrams2_sw_2'], 'overlap'),
+            'Overlap Trigrams (stop-words)': similarity(self.features['word_ngrams1_sw_3'], self.features['word_ngrams2_sw_3'], 'overlap'),
+
+            'Longest Common Subsequence': self.features['lcs_subsequence'],
+            'Longest Common Subsequence (stop-words)': self.features['lcs_subsequence_sw'],
+            'Longest Common Substring': self.features['lcs_substring'],
+            'Longest Common Substring (stop-words)': self.features['lcs_substring_sw'],
+            
+            'Lesk Jac. Sim.': similarity(self.features['lesk1'], self.features['lesk2']),
+
+            'Leacock-Chodorow Sim.': self.features['lch_sim'],
+            'Path Sim.': self.features['wup_sim'],
+            'Wu-Palmer Sim.': self.features['lin_sim'],
+            'Lin Sim.': self.features['path_sim'],
+
+
+            'Levenshtein Distance': self.features['levenshtein'],
+            'Sorensen-Dice Coefficient (lemmas without stop-words)': self.features['sorensen_dice'],
+            ## 'Hamming Distance': self.ham_dist,
+            '# of Verb Tags': self.features['verbs_diff'],
+            '# of Noun Tags': self.features['nouns_diff'],
+            '# of Adjective Tags': self.features['adjs_diff'],
+            '# of Adverb Tags': self.features['advs_diff'],
+            'WAWO': self.features['WAWO'],
+            'WWO': self.features['WWO'],
+        })
