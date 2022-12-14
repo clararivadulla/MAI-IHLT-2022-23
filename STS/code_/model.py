@@ -18,9 +18,10 @@ import code_.utils as utils
 pearson = make_scorer(lambda y_true, y_predicted: pearsonr(y_true, y_predicted)[0], greater_is_better = True)
 
 class Models:
-    def __init__(self, x_train, x_test, y_train, y_test, train_origin, test_origin, seed = 1984, scaler = 'StandardScaler', verbose = 0, cv = 2):
+    def __init__(self, x_train, x_test, y_train, y_test, train_origin, test_origin, sentences, seed = 1984, scaler = 'StandardScaler', verbose = 0, cv = 2):
         scaler = getattr(sklearn.preprocessing, scaler)()   # creates an instance of a scaler object to normalize the features
         self.feature_names = x_train.columns
+        self.sentences = sentences # original sentences form Train to see where it fails
 
         # we do a 3 way split of the data.
         #  - Train is used to find the best hyperparameters using CV
@@ -169,7 +170,7 @@ class Models:
         utils.print_evaluation(specific, overall)
 
 
-    def evaluate_test(self, validation = False, is_ensemble = False):
+    def evaluate_test(self, validation = False, is_ensemble = False, print_failures = False, plot_interpretations = False):
         name_col = 'Pearson Validation' if validation else 'Pearson Test'
         results_dataframe = {'Dataset': [], name_col: []}
 
@@ -199,6 +200,10 @@ class Models:
             results_dataframe['Dataset'].append(dataset)
             results_dataframe[name_col].append(pearson) # evaluate specific test dataset Pearson
 
+        if not self.final and print_failures:
+            # print where the sentences are failing and working well
+            utils.sentence_analysis(predictions, self.y_test, self.sentences, self.regressors, self.x_test, self.feature_names, self.features_selected, plot_interpretations)
+            
 
         # Create a dataframe and print the results
         specific = pd.DataFrame(results_dataframe)

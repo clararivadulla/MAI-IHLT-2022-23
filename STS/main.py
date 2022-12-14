@@ -9,19 +9,19 @@ x_train, y_train = data_reader(True, ['MSRpar.txt', 'MSRvid.txt', 'SMTeuroparl.t
 x_test, y_test = data_reader(False, ['MSRpar.txt', 'MSRvid.txt', 'SMTeuroparl.txt', 'surprise.OnWN.txt', 'surprise.SMTnews.txt'])
 
 # Extract the features
-train_features = Features(x_train).extract_all()
-test_features = Features(x_test).extract_all()
+#train_features = Features(x_train).extract_all()
+#test_features = Features(x_test).extract_all()
 
-#with open('data.pickle', 'rb') as f:
-#    train_features = pickle.load(f)
-#    test_features = pickle.load(f)
+with open('data.pickle', 'rb') as f:
+    train_features = pickle.load(f)
+    test_features = pickle.load(f)
 
-with open("data.pickle", "wb") as f:
-    pickle.dump(train_features, f)
-    pickle.dump(test_features, f)
+#with open("data.pickle", "wb") as f:
+#    pickle.dump(train_features, f)
+#    pickle.dump(test_features, f)
 
 # Build an object, will split the train into train and validation sets. Will build the models and do Feature Selection
-models = Models(train_features, test_features, y_train, y_test, x_train['Origin'], x_test['Origin'])
+models = Models(train_features, test_features, y_train, y_test, x_train['Origin'], x_test['Origin'], x_train)
 
 # Data Visualization
 #utils.covariance_matrix_plot(train_features, y_train)
@@ -55,9 +55,15 @@ models.build_specific('RandomForestRegressor')
 models.build_global('RandomForestRegressor')
 models.build_ensemble('SVR')
 models.evaluate_train()
-models.evaluate_test(validation = True, is_ensemble = True)
+models.evaluate_test(validation = True, is_ensemble = True, print_failures = True)
 models.feature_importance()
 models.feature_selection()
+
+models.build_specific('RandomForestRegressor')
+models.build_global('RandomForestRegressor')
+models.build_ensemble('SVR')
+models.evaluate_test(validation = True, is_ensemble = True, print_failures = True, plot_interpretations = True)
+
 
 # Building Final Estimator
 # We rebuild the predictor with the entire train dataset, without the validation split
