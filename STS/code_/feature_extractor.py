@@ -345,24 +345,10 @@ def number_features(tokens1, tokens2):
     return number_log, number_intersection, number_bool
 
 
-
-
 def levenshtein_distance(l1, l2):
     sent1 = ' '.join(l1)
     sent2 = ' '.join(l2)
     return nltk.edit_distance(sent1, sent2) / max(len(sent1), len(sent2))
-
-
-def sorensen_dice(l1, l2):
-    bigrams_l1 = list(nltk.ngrams(' '.join(l1), 2))
-    bigrams_l2 = list(nltk.ngrams(' '.join(l2), 2))
-    common_bigrams = list(set(bigrams_l1).intersection(bigrams_l2))
-    if len(bigrams_l1) != 0 or len(bigrams_l2) != 0:
-        s = 2 * (len(common_bigrams)) / (len(bigrams_l1) + len(bigrams_l2))
-    else:
-        s = 0
-    return s
-
 
 def hamming(l1, l2):
     sent1 = ' '.join(l1)
@@ -548,7 +534,6 @@ class Features:
             self.features['WAWO'].append(wordnet_augmented_word_overlap(syns, keys1, keys2))
             self.features['WWO'].append(weighted_word_overlap(syns, keys1, keys2))
 
-            self.features['sorensen_dice'].append(sorensen_dice(lemmas1, lemmas2))
             self.features['levenshtein'].append(levenshtein_distance(lemmas1, lemmas2))
 
             vss, vss_ic = vector_space_sentence(syns, keys1, keys2)
@@ -633,27 +618,27 @@ class Features:
             'Lesk Jac. Sim.': similarity(self.features['lesk1'], self.features['lesk2']),
 
             'NE NLTK': similarity(self.features['NE1'], self.features['NE2'], 'dice_empty'),
-            'Tokens Jac. Sim.': similarity(self.features['tokens1'], self.features['tokens2'], 'dice_empty'),
-            'Tokens (stop-words) Jac. Sim.': similarity(self.features['tokens1_sw'], self.features['tokens2_sw'], 'dice_empty'),
-            'Lemmas Jac. Sim.': similarity(self.features['lemmas1'], self.features['lemmas2'], 'dice_empty'),
-            'Lemmas (stop-words) Jac. Sim.': similarity(self.features['lemmas1_sw'], self.features['lemmas2_sw'], 'dice_empty'),
-            'Lemmas (Spacy) Jac. Sim.': similarity(self.features['lemmas1_spacy'], self.features['lemmas2_spacy'], 'dice_empty'),
+            'Tokens Dice Sim.': similarity(self.features['tokens1'], self.features['tokens2'], 'dice_empty'),
+            'Tokens (stop-words) Dice Sim.': similarity(self.features['tokens1_sw'], self.features['tokens2_sw'], 'dice_empty'),
+            'Lemmas Dice Sim.': similarity(self.features['lemmas1'], self.features['lemmas2'], 'dice_empty'),
+            'Lemmas (stop-words) Dice Sim.': similarity(self.features['lemmas1_sw'], self.features['lemmas2_sw'], 'dice_empty'),
+            'Lemmas (Spacy) Dice Sim.': similarity(self.features['lemmas1_spacy'], self.features['lemmas2_spacy'], 'dice_empty'),
 
-            'Unigrams Slice Sim.': similarity(self.features['word_ngrams1_1'], self.features['word_ngrams2_1'], 'dice_empty'),
-            'Bigrams Slice Sim.': similarity(self.features['word_ngrams1_2'], self.features['word_ngrams2_2'], 'dice_empty'),
-            'Trigrams Slice Sim.': similarity(self.features['word_ngrams1_3'], self.features['word_ngrams2_3'], 'dice_empty'),
-            'Fourgrams Slice Sim.': similarity(self.features['word_ngrams1_4'], self.features['word_ngrams2_4'], 'dice_empty'),
-            'Unigrams (stop-words) Slice Sim.': similarity(self.features['word_ngrams1_sw_1'], self.features['word_ngrams2_sw_1'], 'dice_empty'),
-            'Bigrams (stop-words) Slice Sim.': similarity(self.features['word_ngrams1_sw_2'], self.features['word_ngrams2_sw_2'], 'dice_empty'),
-            'Trigrams (stop-words) Slice Sim.': similarity(self.features['word_ngrams1_sw_3'], self.features['word_ngrams2_sw_3'], 'dice_empty'),
-            'Fourgrams (stop-words) Slice Sim.': similarity(self.features['word_ngrams1_sw_4'], self.features['word_ngrams2_sw_4'], 'dice_empty'),
+            'Unigrams Dice Sim.': similarity(self.features['word_ngrams1_1'], self.features['word_ngrams2_1'], 'dice_empty'),
+            'Bigrams Dice Sim.': similarity(self.features['word_ngrams1_2'], self.features['word_ngrams2_2'], 'dice_empty'),
+            'Trigrams Dice Sim.': similarity(self.features['word_ngrams1_3'], self.features['word_ngrams2_3'], 'dice_empty'),
+            'Fourgrams Dice Sim.': similarity(self.features['word_ngrams1_4'], self.features['word_ngrams2_4'], 'dice_empty'),
+            'Unigrams (stop-words) Dice Sim.': similarity(self.features['word_ngrams1_sw_1'], self.features['word_ngrams2_sw_1'], 'dice_empty'),
+            'Bigrams (stop-words) Dice Sim.': similarity(self.features['word_ngrams1_sw_2'], self.features['word_ngrams2_sw_2'], 'dice_empty'),
+            'Trigrams (stop-words) Dice Sim.': similarity(self.features['word_ngrams1_sw_3'], self.features['word_ngrams2_sw_3'], 'dice_empty'),
+            'Fourgrams (stop-words) Dice Sim.': similarity(self.features['word_ngrams1_sw_4'], self.features['word_ngrams2_sw_4'], 'dice_empty'),
 
-            'Char Bigrams Slice Sim.': similarity(self.features['char_ngrams1_2'], self.features['char_ngrams2_2'], 'dice_empty'),
-            'Char Trigrams Slice Sim.': similarity(self.features['char_ngrams1_3'], self.features['char_ngrams2_3'], 'dice_empty'),
-            'Char Fourgrams Slice Sim.': similarity(self.features['char_ngrams1_4'], self.features['char_ngrams2_4'], 'dice_empty'),
-            'Char Bigrams (stop-words) Slice Sim.': similarity(self.features['char_ngrams1_sw_2'], self.features['char_ngrams2_sw_2'], 'dice_empty'),
-            'Char Trigrams (stop-words) Slice Sim.': similarity(self.features['char_ngrams1_sw_3'], self.features['char_ngrams2_sw_3'], 'dice_empty'),
-            'Char Fourgrams (stop-words) Slice Sim.': similarity(self.features['char_ngrams1_sw_4'], self.features['char_ngrams2_sw_4'], 'dice_empty'),
+            'Char Bigrams Dice Sim.': similarity(self.features['char_ngrams1_2'], self.features['char_ngrams2_2'], 'dice_empty'),
+            'Char Trigrams Dice Sim.': similarity(self.features['char_ngrams1_3'], self.features['char_ngrams2_3'], 'dice_empty'),
+            'Char Fourgrams Dice Sim.': similarity(self.features['char_ngrams1_4'], self.features['char_ngrams2_4'], 'dice_empty'),
+            'Char Bigrams (stop-words) Dice Sim.': similarity(self.features['char_ngrams1_sw_2'], self.features['char_ngrams2_sw_2'], 'dice_empty'),
+            'Char Trigrams (stop-words) Dice Sim.': similarity(self.features['char_ngrams1_sw_3'], self.features['char_ngrams2_sw_3'], 'dice_empty'),
+            'Char Fourgrams (stop-words) Dice Sim.': similarity(self.features['char_ngrams1_sw_4'], self.features['char_ngrams2_sw_4'], 'dice_empty'),
             
             'Lesk Jac. Sim.': similarity(self.features['lesk1'], self.features['lesk2']),
 
@@ -669,7 +654,6 @@ class Features:
 
 
             'Levenshtein Distance': self.features['levenshtein'],
-            'Sorensen-Dice Coefficient (lemmas without stop-words)': self.features['sorensen_dice'],
             ## 'Hamming Distance': self.ham_dist,
             
             '# of Verb Tags': self.features['verbs_diff'],
