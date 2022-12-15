@@ -18,7 +18,7 @@ import code_.utils as utils
 pearson = make_scorer(lambda y_true, y_predicted: pearsonr(y_true, y_predicted)[0], greater_is_better = True)
 
 class Models:
-    def __init__(self, x_train, x_test, y_train, y_test, train_origin, test_origin, sentences, seed = 1984, scaler = 'StandardScaler', verbose = 0, cv = 2):
+    def __init__(self, x_train, x_test, y_train, y_test, train_origin, test_origin, sentences, seed = 1984, scaler = 'StandardScaler', verbose = 0, cv = 5):
         scaler = getattr(sklearn.preprocessing, scaler)()   # creates an instance of a scaler object to normalize the features
         self.feature_names = x_train.columns
         self.sentences = sentences # original sentences form Train to see where it fails
@@ -59,12 +59,32 @@ class Models:
         # grid search 
         self.grid_parameters = {
                 'RandomForestRegressor': {
-                    'n_estimators': [20], 
-                    'max_features': ['sqrt'],  # 'log2'
+                    'n_estimators': [100, 250, 500],  
+                    'max_features': [None], 
                     'bootstrap': [True], 
                     'oob_score': [True], 
-                    'criterion': ['squared_error'],  # 'absolute_error'
+                    'criterion': ['squared_error'], 
                     'max_depth': [4], 
+                    'min_samples_split': [2], 
+                    'min_samples_leaf': [2], 
+                    'random_state': [self.seed]
+                },
+                'SVR': {
+                    'C': [0.01, 0.1, 1, 100],
+                    'kernel': ['rbf'], 
+                    'gamma': ['auto', 'scale', 0.005, 0.05, 0.5, 2, 5]
+                }
+            }
+
+        # larger grid search for the final parameter tuning
+        self.grid_parameters_big = {
+                'RandomForestRegressor': {
+                    'n_estimators': [100, 200, 300, 400, 500], 
+                    'max_features': [None, 'log2'],
+                    'bootstrap': [True], 
+                    'oob_score': [True], 
+                    'criterion': ['squared_error', 'absolute_error'],  
+                    'max_depth': [None, 4], 
                     'min_samples_split': [2], 
                     'min_samples_leaf': [2], 
                     'random_state': [self.seed]
@@ -89,12 +109,13 @@ class Models:
         self.y_test = self.y_test_real
         self.test_origin = self.test_origin_real
 
+        self.grid_parameters = self.grid_parameters_big
+
         self.regressors = {}
+
 
     def feature_selection_use(self, use_feature_selection = True):
         self.use_features_selection = use_feature_selection and len(self.features_selected) != 0
-
-
 
     def build_global(self, model, parameters = None):
         if parameters is None:
@@ -200,11 +221,6 @@ class Models:
             results_dataframe['Dataset'].append(dataset)
             results_dataframe[name_col].append(pearson) # evaluate specific test dataset Pearson
 
-        if not self.final and print_failures:
-            # print where the sentences are failing and working well
-            utils.sentence_analysis(predictions, self.y_test, self.sentences, self.regressors, self.x_test, self.feature_names, self.features_selected, plot_interpretations)
-            
-
         # Create a dataframe and print the results
         specific = pd.DataFrame(results_dataframe)
         if validation:
@@ -212,6 +228,11 @@ class Models:
         else:
             overall = pd.DataFrame({'Dataset': ['Overall'], name_col: [pearsonr(self.y_test, predictions)[0]]})
         utils.print_evaluation(specific, overall, validation = validation, is_train = False)
+
+        if not self.final and print_failures:
+            # print where the sentences are failing and working well
+            utils.sentence_analysis(predictions, self.y_test, self.sentences, self.regressors, self.x_test, self.feature_names, self.features_selected, plot_interpretations)
+            
 
 
     def feature_importance(self):
@@ -279,8 +300,8 @@ class Models:
         print('We keep for each model the following:')
         for model, feats in features.items():
             print(model.title(), 'using now:', len(feats), 'features')
-            print(feats)
-            print()
+            #print(feats)
+            #print()
 
 
             

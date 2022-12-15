@@ -8,17 +8,30 @@ import pickle
 x_train, y_train = data_reader(True, ['MSRpar.txt', 'MSRvid.txt', 'SMTeuroparl.txt'])
 x_test, y_test = data_reader(False, ['MSRpar.txt', 'MSRvid.txt', 'SMTeuroparl.txt', 'surprise.OnWN.txt', 'surprise.SMTnews.txt'])
 
+#with open('data.pickle', 'rb') as f:
+#    train_features = pickle.load(f)
+#    test_features = pickle.load(f)
+
 # Extract the features
-#train_features = Features(x_train).extract_all()
-#test_features = Features(x_test).extract_all()
+train_features = Features(x_train)
+test_features = Features(x_test)
+
+
+train_features.extract_all().to_csv('train_all.csv')
+train_features.extract_lexic().to_csv('train_lexic.csv')
+train_features.extract_syntactic().to_csv('train_synt.csv')
+
+test_features.extract_all().to_csv('test_all.csv')
+test_features.extract_lexic().to_csv('test_lexic.csv')
+test_features.extract_syntactic().to_csv('test_synt.csv')
 
 with open('data.pickle', 'rb') as f:
     train_features = pickle.load(f)
     test_features = pickle.load(f)
 
-#with open("data.pickle", "wb") as f:
-#    pickle.dump(train_features, f)
-#    pickle.dump(test_features, f)
+with open("data.pickle", "wb") as f:
+    pickle.dump(train_features, f)
+    pickle.dump(test_features, f)
 
 # Build an object, will split the train into train and validation sets. Will build the models and do Feature Selection
 models = Models(train_features, test_features, y_train, y_test, x_train['Origin'], x_test['Origin'], x_train)
@@ -28,8 +41,6 @@ models = Models(train_features, test_features, y_train, y_test, x_train['Origin'
 #utils.PCA(train_features, y_train)
 
 # STEP 1: MODEL SELECTION
-
-
 # we build a global with SVM
 #models.build_global('SVR')
 #models.evaluate_train()
